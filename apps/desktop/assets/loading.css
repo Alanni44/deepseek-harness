@@ -1,0 +1,92 @@
+:root {
+  color-scheme: light dark;
+  font-family: "Segoe UI Variable", "Segoe UI", sans-serif;
+  background: #f7f8fa;
+  color: #172033;
+}
+
+body {
+  display: grid;
+  min-height: 100vh;
+  margin: 0;
+  place-items: center;
+  background: radial-gradient(circle at 50% 34%, #ffffff 0, #f7f8fa 48%, #edf0f5 100%);
+}
+
+main {
+  width: min(32rem, calc(100vw - 4rem));
+  text-align: center;
+}
+
+img {
+  filter: drop-shadow(0 0.75rem 1.25rem rgb(35 74 179 / 18%));
+}
+
+h1 {
+  margin: 1.25rem 0 0.35rem;
+  font-size: 1.55rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+#version {
+  min-height: 1.25rem;
+  margin: 0;
+  color: #687287;
+  font-size: 0.82rem;
+}
+
+#status {
+  margin: 1.8rem 0 0.7rem;
+  color: #3d475c;
+  font-size: 0.95rem;
+}
+
+.pulse {
+  width: 8rem;
+  height: 0.2rem;
+  margin: 0 auto;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #dce2ee;
+}
+
+.pulse::after {
+  display: block;
+  width: 42%;
+  height: 100%;
+  border-radius: inherit;
+  background: #4a72e8;
+  content: "";
+  animation: travel 1.25s ease-in-out infinite alternate;
+}
+
+body[data-stage="failed"] .pulse::after {
+  width: 100%;
+  background: #c3424f;
+  animation: none;
+}
+
+@keyframes travel {
+  from { transform: translateX(0); }
+  to { transform: translateX(138%); }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    background: #111521;
+    color: #f1f4fa;
+  }
+
+  body {
+    background: radial-gradient(circle at 50% 34%, #20283a 0, #151a27 50%, #10131d 100%);
+  }
+
+  #version { color: #909bb2; }
+  #status { color: #c6cede; }
+  .pulse { background: #30394c; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pulse::after { animation: none; }
+}

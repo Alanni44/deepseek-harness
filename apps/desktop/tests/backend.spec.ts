@@ -37,6 +37,22 @@ describe('resolveDshBin', () => {
 })
 
 describe('startBackend', () => {
+  it('starts from the deployed backend root', async () => {
+    const startupOutput: string[] = []
+    const backend = startBackend({
+      node: process.execPath,
+      bin: fixture('backend-cwd.mjs'),
+      cwd: FIXTURES,
+      port: 0,
+      readinessTimeoutMs: 1_000,
+      onStartupOutput: (chunk) => { startupOutput.push(chunk) },
+    })
+
+    await backend.ready
+    expect(startupOutput.join('')).toContain(`cwd:${FIXTURES}`)
+    await backend.stop()
+  })
+
   it('resolves the first readiness URL and stops without retaining post-readiness output', async () => {
     const startupOutput: string[] = []
     const backend = startBackend({

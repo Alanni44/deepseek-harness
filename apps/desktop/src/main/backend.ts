@@ -46,6 +46,8 @@ export interface StartBackendOptions {
   node: string
   /** Built dsh CLI entry (from {@link resolveDshBin}). */
   bin: string
+  /** Real-filesystem backend root used as the child working directory. */
+  cwd?: string
   /** Listen port; pass 0 to let the OS assign a free one. */
   port: number
   /** Environment for the backend process; defaults to the inherited environment. */
@@ -98,6 +100,7 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reje
  */
 export function startBackend(options: StartBackendOptions): BackendProcess {
   const child = spawn(options.node, [options.bin, 'web', '--port', String(options.port)], {
+    ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
     env: options.env ?? process.env,
     stdio: ['ignore', 'pipe', 'pipe'],
   })

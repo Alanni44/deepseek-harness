@@ -1,130 +1,287 @@
-/**
- * Electron main process for the dsh desktop shell. It boots the dsh web backend
- * as a child process, waits for the backend's readiness line, then opens a
- * native window on the loopback URL. Window and backend lifetimes are coupled:
- * closing the window stops the backend, and a backend crash closes the window.
- * @module @deepseek-ai/dsh-desktop
- */
+/** Electron composition root for the productized DeepSeek Harness desktop app. */
 
-import { app, BrowserWindow, dialog, shell } from 'electron'
-import { existsSync } from 'node:fs'
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  Menu,
+  nativeTheme,
+  shell,
+  Tray,
+} from 'electron'
+import { randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { release as osRelease } from 'node:os'
 import { join } from 'node:path'
-import { resolveBackendNode, resolveDshBin, startBackend, type BackendProcess } from './backend.ts'
+import { startBackend, type BackendExit, type BackendProcess } from './backend.ts'
+import { runDesktopApp, type StartupRecoveryAction } from './desktop-app.ts'
+import { exportDiagnostics, type DiagnosticOptions } from './diagnostics.ts'
+import {
+  activeRunPath,
+  beginRun,
+  clearActiveRun,
+  lastHealthyPath,
+  markRunHealthy,
+  type HealthOptions,
+  type StartupStage,
+} from './health.ts'
+import {
+  bindApplicationLifecycle,
+  bindWindowClose,
+  createQuitCoordinator,
+  restoreWindow,
+  type LifecycleAppLike,
+  type LifecycleWindowLike,
+  type QuitCoordinator,
+} from './lifecycle.ts'
+import { createDesktopLogger, pruneLogs } from './logging.ts'
+import { createDesktopMenus, type MenuTemplate, type TrayLike } from './menu.ts'
+import { resolveRuntimePaths } from './runtime.ts'
+import { createMainWindow, type DesktopWindow } from './window.ts'
 
-/** Grace before a backend that ignores SIGTERM is force-killed. */
-const BACKEND_STOP_GRACE_MS = 3_000
+const PRODUCT_NAME = 'DeepSeek Harness'
+const APP_USER_MODEL_ID = 'ai.deepseek.dsh.desktop'
 
-/** The self-contained Node shipped beside the packaged app, when present. */
-function bundledNode(): string | undefined {
-  if (!app.isPackaged) return undefined
-  const candidate = join(process.resourcesPath, 'node', 'node.exe')
-  return existsSync(candidate) ? candidate : undefined
+interface UpstreamRecord {
+  repository: string
+  commit: string
+  sourceVersion: string
+  desktopVersion: string
 }
 
-/**
- * Stop a backend child process: SIGTERM first, then SIGKILL after the grace
- * period. Resolves once the child has exited (or was never started).
- * @param child - the backend child process.
- */
-function stopBackend(child: BackendProcess['child']): Promise<void> {
-  return new Promise((resolve) => {
-    if (child.exitCode !== null || child.signalCode !== null) {
-      resolve()
-      return
-    }
-    const force = setTimeout(() => { child.kill('SIGKILL'); resolve() }, BACKEND_STOP_GRACE_MS)
-    child.once('exit', () => { clearTimeout(force); resolve() })
-    child.kill('SIGTERM')
+function readUpstreamRecord(path: string): UpstreamRecord {
+  const value: unknown = JSON.parse(readFileSync(path, 'utf8'))
+  if (typeof value !== 'object' || value === null) throw new Error('desktop upstream record is not an object')
+  const record = value as Record<string, unknown>
+  for (const field of ['repository', 'commit', 'sourceVersion', 'desktopVersion'] as const) {
+    if (typeof record[field] !== 'string') throw new Error(`desktop upstream field ${field} is invalid`)
+  }
+  return record as unknown as UpstreamRecord
+}
+
+function recoveryAction(response: number): StartupRecoveryAction {
+  if (response === 0) return 'retry'
+  if (response === 1) return 'export-diagnostics'
+  if (response === 2) return 'open-logs'
+  return 'quit'
+}
+
+async function main(): Promise<void> {
+  app.setAppUserModelId(APP_USER_MODEL_ID)
+  const appPath = app.getAppPath()
+  const packagedRequire = createRequire(join(process.resourcesPath, 'backend', 'package.json'))
+  const developmentRequire = createRequire(import.meta.url)
+  const paths = resolveRuntimePaths({
+    packaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    appPath,
+    env: process.env,
+    resolvePackageJson: specifier => (app.isPackaged ? packagedRequire : developmentRequire).resolve(specifier),
   })
-}
-
-let mainWindow: BrowserWindow | undefined
-let backend: BackendProcess | undefined
-
-/** Open the window on a backend loopback URL. */
-function createWindow(url: string): BrowserWindow {
-  const window = new BrowserWindow({
-    width: 1280,
-    height: 840,
-    show: false,
-    title: 'DeepSeek Harness',
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
+  const upstream = readUpstreamRecord(join(appPath, 'upstream.json'))
+  const logDirectory = app.getPath('logs')
+  const logger = createDesktopLogger({ directory: logDirectory })
+  const healthDirectory = join(app.getPath('userData'), 'desktop-health')
+  const health: HealthOptions = {
+    directory: healthDirectory,
+    record: {
+      runId: randomUUID(),
+      desktopVersion: upstream.desktopVersion,
+      sourceVersion: upstream.sourceVersion,
+      upstreamCommit: upstream.commit,
+      stage: 'starting-service',
+      startedAt: new Date().toISOString(),
     },
-  })
-  window.once('ready-to-show', () => { window.show() })
-  // New windows and off-app navigations leave the shell; the app's own SPA
-  // navigation stays same-origin and keeps rendering in place.
-  window.webContents.setWindowOpenHandler(({ url: target }) => {
-    void shell.openExternal(target)
-    return { action: 'deny' }
-  })
-  window.webContents.on('will-navigate', (event, target) => {
-    if (target === url || target.startsWith(`${url}/`)) return
-    event.preventDefault()
-    void shell.openExternal(target)
-  })
-  void window.loadURL(url)
-  return window
-}
+    now: () => new Date(),
+  }
+  const previousRun = beginRun(health)
+  let startupStage: StartupStage = 'starting-service'
+  let mainWindow: DesktopWindow | undefined
+  let activeTray: TrayLike | undefined
+  let activeCoordinator: QuitCoordinator | undefined
 
-/** Report a fatal startup failure and exit. */
-function fail(message: string): void {
-  backend = undefined
-  dialog.showErrorBox('DeepSeek Harness', message)
-  app.quit()
+  logger.info('desktop-start', {
+    desktopVersion: upstream.desktopVersion,
+    sourceVersion: upstream.sourceVersion,
+    upstreamCommit: upstream.commit,
+    previousRunDetected: previousRun !== undefined,
+  })
+
+  const currentDiagnosticOptions = (): DiagnosticOptions => ({
+    metadata: {
+      desktopVersion: upstream.desktopVersion,
+      sourceVersion: upstream.sourceVersion,
+      upstreamRepository: upstream.repository,
+      upstreamCommit: upstream.commit,
+      startupStage,
+      previousRunDetected: previousRun !== undefined,
+      platform: process.platform,
+      arch: process.arch,
+      osRelease: osRelease(),
+      electronVersion: process.versions.electron,
+      nodeVersion: process.versions.node,
+    },
+    logDirectory,
+    logFiles: pruneLogs({ directory: logDirectory }).files.map(file => file.path),
+    activeRunPath: activeRunPath(healthDirectory),
+    lastHealthyPath: lastHealthyPath(healthDirectory),
+  })
+
+  const exportCurrentDiagnostics = async (): Promise<void> => {
+    const stamp = new Date().toISOString().replaceAll(/[:.]/gu, '-')
+    const destination = await exportDiagnostics({
+      diagnostics: currentDiagnosticOptions(),
+      defaultPath: join(app.getPath('downloads'), `DeepSeek-Harness-diagnostics-${stamp}.zip`),
+      dialog: {
+        showMessageBox: async options => dialog.showMessageBox(options),
+        showSaveDialog: async options => dialog.showSaveDialog(options),
+      },
+    })
+    if (destination !== undefined) logger.info('diagnostics-exported')
+  }
+
+  const openLogs = async (): Promise<void> => {
+    const error = await shell.openPath(logDirectory)
+    if (error !== '') logger.warn('open-logs-failed', { message: error })
+  }
+
+  const showRecovery = async (error: Error): Promise<StartupRecoveryAction> => {
+    logger.error('desktop-startup-failed', { message: error.message })
+    const result = await dialog.showMessageBox({
+      type: 'error',
+      title: PRODUCT_NAME,
+      message: 'DeepSeek Harness could not finish starting.',
+      detail: `${error.message}\n\nNo profiles, plugins, sessions, or user files were changed.`,
+      buttons: ['Retry', 'Export Diagnostics', 'Open Logs', 'Quit'],
+      defaultId: 0,
+      cancelId: 3,
+      noLink: true,
+    })
+    return recoveryAction(result.response)
+  }
+
+  const handleBackendExit = async (exit: BackendExit): Promise<void> => {
+    logger.error('backend-unexpected-exit', { code: exit.code, signal: exit.signal })
+    startupStage = 'failed'
+    if (mainWindow !== undefined) await mainWindow.setStage('failed', upstream.desktopVersion)
+    for (;;) {
+      const message = `The local service exited (code ${String(exit.code)}, signal ${String(exit.signal)}).`
+      const action = await showRecovery(new Error(message))
+      if (action === 'export-diagnostics') await exportCurrentDiagnostics()
+      else if (action === 'open-logs') await openLogs()
+      else {
+        if (action === 'retry') app.relaunch()
+        await activeCoordinator?.requestQuit(action === 'retry' ? 'window' : 'menu')
+        return
+      }
+    }
+  }
+
+  app.on('second-instance', () => {
+    if (mainWindow !== undefined) restoreWindow(mainWindow.native)
+  })
+
+  await runDesktopApp({
+    desktopVersion: upstream.desktopVersion,
+    createWindow: () => {
+      const window = createMainWindow({
+        createBrowserWindow: options => new BrowserWindow(options),
+        loadingHtml: paths.loadingHtml,
+        icon: paths.icon,
+        openExternal: url => shell.openExternal(url),
+      })
+      mainWindow = window
+      return {
+        loadLoading: async (stage, version) => {
+          startupStage = stage
+          logger.info('startup-stage', { stage })
+          await window.loadLoading(stage, version)
+        },
+        setStage: async (stage, version) => {
+          startupStage = stage
+          logger.info('startup-stage', { stage })
+          await window.setStage(stage, version)
+        },
+        loadMain: async url => window.loadMain(url),
+      }
+    },
+    startBackend: (): BackendProcess => startBackend({
+      node: paths.node,
+      bin: paths.dshBin,
+      cwd: paths.backendRoot,
+      port: 0,
+      onStartupOutput: (chunk) => { logger.info('backend-startup-output', { message: chunk }) },
+    }),
+    markHealthy: () => {
+      startupStage = 'ready'
+      markRunHealthy(health)
+      logger.info('desktop-ready')
+    },
+    createMenus: () => {
+      const menus = createDesktopMenus({
+        productName: PRODUCT_NAME,
+        desktopVersion: upstream.desktopVersion,
+        trayImage: nativeTheme.shouldUseDarkColors ? paths.trayDark : paths.trayLight,
+        commands: {
+          show: () => { if (mainWindow !== undefined) restoreWindow(mainWindow.native) },
+          checkForUpdates: async () => {
+            await dialog.showMessageBox({
+              type: 'info',
+              title: PRODUCT_NAME,
+              message: 'Update checks will be enabled in the installed build.',
+            })
+          },
+          exportDiagnostics: exportCurrentDiagnostics,
+          quit: async () => { await activeCoordinator?.requestQuit('tray') },
+        },
+        buildMenu: (template: MenuTemplate) => Menu.buildFromTemplate(template),
+        setApplicationMenu: (menu) => { Menu.setApplicationMenu(menu as Menu) },
+        createTray: image => new Tray(image),
+        onTrayError: (error) => { logger.error('tray-create-failed', { message: error.message }) },
+        onCommandError: (error) => { logger.error('desktop-command-failed', { message: error.message }) },
+      })
+      activeTray = menus.tray
+      return { trayAvailable: menus.tray !== undefined }
+    },
+    bindLifecycle: ({ backend, menus }) => {
+      if (mainWindow === undefined) throw new Error('desktop window disappeared before lifecycle binding')
+      const coordinator = createQuitCoordinator({
+        stopBackend: async () => backend.stop(),
+        clearActiveRun: () => clearActiveRun(health),
+        destroyTray: () => {
+          activeTray?.destroy()
+          activeTray = undefined
+        },
+        appQuit: () => { app.quit() },
+      })
+      activeCoordinator = coordinator
+      bindWindowClose({
+        window: mainWindow.native as unknown as LifecycleWindowLike,
+        coordinator,
+        trayAvailable: () => menus.trayAvailable,
+      })
+      bindApplicationLifecycle(app as unknown as LifecycleAppLike, coordinator)
+    },
+    checkForUpdatesInBackground: () => Promise.resolve(),
+    showStartupRecovery: showRecovery,
+    exportDiagnostics: exportCurrentDiagnostics,
+    openLogs,
+    quitWithoutBackend: () => {
+      app.quit()
+      return Promise.resolve()
+    },
+    onBackendExit: handleBackendExit,
+  })
+
 }
 
 if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
-  app.on('second-instance', () => {
-    if (mainWindow === undefined) return
-    if (mainWindow.isMinimized()) mainWindow.restore()
-    mainWindow.focus()
-  })
-
-  void app.whenReady().then(() => {
-    const node = resolveBackendNode(process.env, bundledNode())
-    const bin = process.env.DSH_DESKTOP_DSH_BIN ?? resolveDshBin()
-    backend = startBackend({
-      node,
-      bin,
-      port: 0,
-      onStartupOutput: (chunk) => { process.stderr.write(chunk) },
-    })
-
-    backend.ready.then(
-      (url) => {
-        mainWindow = createWindow(url)
-        mainWindow.on('closed', () => { mainWindow = undefined })
-      },
-      (error: unknown) => { fail(error instanceof Error ? error.message : String(error)) },
-    )
-
-    backend.child.on('exit', (code, signal) => {
-      // A backend that dies after readiness leaves the window with nothing to
-      // talk to; closing it quits the app. During our own quit the window is
-      // already gone, so this is a no-op on the normal path.
-      if (mainWindow === undefined) return
-      process.stderr.write(`dsh desktop: backend exited (code ${String(code)}, signal ${String(signal)})\n`)
-      mainWindow.close()
-    })
-  })
-
-  app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') app.quit()
-  })
-
-  app.on('before-quit', (event) => {
-    if (backend === undefined) return
-    const child = backend.child
-    backend = undefined
-    if (child.exitCode === null && child.signalCode === null) {
-      event.preventDefault()
-      void stopBackend(child).then(() => { app.quit() })
-    }
+  void app.whenReady().then(main).catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error)
+    dialog.showErrorBox(PRODUCT_NAME, message)
+    app.quit()
   })
 }
