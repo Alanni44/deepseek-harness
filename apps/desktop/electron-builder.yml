@@ -1,0 +1,42 @@
+# Packaging config for the dsh desktop shell (Windows only). electron-builder
+# collects the app's `files` plus the production dependency closure
+# (`@deepseek-ai/dsh` and the whole harness it depends on), so the packaged app
+# spawns the backend from its own node_modules.
+appId: ai.deepseek.dsh.desktop
+productName: DeepSeek Harness
+directories:
+  output: release
+files:
+  - lib/**
+  - package.json
+# The spawned dsh backend runs under a real Node, which cannot read an asar
+# archive: the CLI entry and the whole harness closure it resolves must sit on a
+# real filesystem path. Ship unpacked rather than asar so the backend (and
+# `healProfilesModuleFallback`'s symlinks into those packages) resolve.
+asar: false
+# The Electron main process carries no native modules: node-pty and koffi in
+# the dependency closure belong to the spawned dsh backend, which runs under
+# the bundled Node (its ABI), never Electron's. Rebuilding them here would both
+# require a compiler toolchain and produce binaries the backend cannot load.
+npmRebuild: false
+# electron-builder's pnpm walk follows `dependencies` only and drops workspace
+# packages that appear solely as peerDependencies (the Service Definition seam).
+# Those packages are declared as direct `dependencies` of apps/desktop so the
+# packaged backend's node_modules stays complete; keep that list in sync when
+# the harness adds a peer-only package.
+# A self-contained Node runtime (scripts/fetch-node.mjs writes
+# build/node/node.exe) ships beside the app so the backend runs without `node`
+# on PATH.
+extraResources:
+  - from: build/node
+    to: node
+win:
+  icon: build/icon.ico
+  target:
+    - nsis
+    - portable
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
