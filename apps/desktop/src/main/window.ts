@@ -21,6 +21,7 @@ export interface NativeWindowLike {
   focus(): void
   restore(): void
   isMinimized(): boolean
+  setProgressBar(progress: number): void
   on(event: string, listener: (...args: unknown[]) => void): void
   once(event: string, listener: (...args: unknown[]) => void): void
 }

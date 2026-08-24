@@ -20,6 +20,7 @@ function windowHarness() {
     focus: vi.fn(),
     restore: vi.fn(),
     isMinimized: vi.fn(() => false),
+    setProgressBar: vi.fn(),
     on: vi.fn((name: string, listener: (...args: unknown[]) => void) => { events.set(name, listener) }),
     once: vi.fn((name: string, listener: (...args: unknown[]) => void) => { events.set(name, listener) }),
     webContents: {

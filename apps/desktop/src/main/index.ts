@@ -9,6 +9,7 @@ import {
   shell,
   Tray,
 } from 'electron'
+import { autoUpdater } from 'electron-updater'
 import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -38,6 +39,7 @@ import {
 import { createDesktopLogger, pruneLogs } from './logging.ts'
 import { createDesktopMenus, type MenuTemplate, type TrayLike } from './menu.ts'
 import { resolveRuntimePaths } from './runtime.ts'
+import { createUpdateManager, type UpdateManager, type UpdaterLike } from './updater.ts'
 import { createMainWindow, type DesktopWindow } from './window.ts'
 
 const PRODUCT_NAME = 'DeepSeek Harness'
@@ -100,6 +102,7 @@ async function main(): Promise<void> {
   let mainWindow: DesktopWindow | undefined
   let activeTray: TrayLike | undefined
   let activeCoordinator: QuitCoordinator | undefined
+  let updateManager: UpdateManager | undefined
 
   logger.info('desktop-start', {
     desktopVersion: upstream.desktopVersion,
@@ -225,13 +228,7 @@ async function main(): Promise<void> {
         trayImage: nativeTheme.shouldUseDarkColors ? paths.trayDark : paths.trayLight,
         commands: {
           show: () => { if (mainWindow !== undefined) restoreWindow(mainWindow.native) },
-          checkForUpdates: async () => {
-            await dialog.showMessageBox({
-              type: 'info',
-              title: PRODUCT_NAME,
-              message: 'Update checks will be enabled in the installed build.',
-            })
-          },
+          checkForUpdates: async () => { await updateManager?.check(true) },
           exportDiagnostics: exportCurrentDiagnostics,
           quit: async () => { await activeCoordinator?.requestQuit('tray') },
         },
@@ -256,6 +253,15 @@ async function main(): Promise<void> {
         appQuit: () => { app.quit() },
       })
       activeCoordinator = coordinator
+      updateManager = createUpdateManager({
+        packaged: app.isPackaged,
+        env: process.env,
+        updater: autoUpdater as unknown as UpdaterLike,
+        dialog: { showMessageBox: async options => dialog.showMessageBox(options) },
+        window: mainWindow.native,
+        logger,
+        quitCoordinator: coordinator,
+      })
       bindWindowClose({
         window: mainWindow.native as unknown as LifecycleWindowLike,
         coordinator,
@@ -263,7 +269,7 @@ async function main(): Promise<void> {
       })
       bindApplicationLifecycle(app as unknown as LifecycleAppLike, coordinator)
     },
-    checkForUpdatesInBackground: () => Promise.resolve(),
+    checkForUpdatesInBackground: async () => { await updateManager?.check(false) },
     showStartupRecovery: showRecovery,
     exportDiagnostics: exportCurrentDiagnostics,
     openLogs,
