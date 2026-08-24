@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/superpowers/specs/2026-08-24-desktop-productization-design.md
-2026-08-24-desktop-productization-design.md: 58b533f7abef68ed4e72bb26a9c6fb858ab0e74b
-2026-08-24-desktop-productization-design.zh.md: ec16840afd67d6390c571d39ab65c0ab1a8499c5
+2026-08-24-desktop-productization-design.md: dfe253f7b08ebc5af5fad0521f205ec990c4badc
+2026-08-24-desktop-productization-design.zh.md: 50ee4db00eb6024559aae1d19cd30644ca3bc563
