@@ -1,8 +1,8 @@
 /**
  * Render the DeepSeek Harness mark (assets/icon.svg, the same mark as the web
  * favicon) into a multi-size Windows ICO plus a 256px PNG. The PNG is the
- * BrowserWindow icon for source-mode runs; the ICO is the app/portable/installer
- * icon electron-builder embeds.
+ * BrowserWindow and loading icon for source-mode runs; the ICO is embedded in
+ * the installed executable and NSIS installer. Two compact PNGs serve the tray.
  *
  * Usage: `node scripts/make-icon.mjs` (run by the `dist` script before
  * electron-builder).
@@ -58,7 +58,10 @@ async function main() {
   mkdirSync(outDir, { recursive: true })
   writeFileSync(join(outDir, 'icon.ico'), buildIco(images))
   writeFileSync(join(outDir, 'icon.png'), master)
-  console.log(`make-icon: wrote build/icon.ico (${SIZES.join(', ')}) and build/icon.png`)
+  const tray = await sharp(master).resize(32, 32).png().toBuffer()
+  writeFileSync(join(outDir, 'tray-light.png'), tray)
+  writeFileSync(join(outDir, 'tray-dark.png'), tray)
+  console.log(`make-icon: wrote ICO (${SIZES.join(', ')}), window, loading, and tray variants`)
 }
 
 await main()

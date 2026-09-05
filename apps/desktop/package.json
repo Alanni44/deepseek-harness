@@ -11,17 +11,21 @@
     "directory": "apps/desktop"
   },
   "type": "module",
-  "main": "lib/main/index.js",
+  "main": "lib/main/index.cjs",
   "files": [
     "lib"
   ],
   "license": "MIT",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "start": "pnpm run build && electron .",
+    "build": "tsdown --config tsdown.config.ts",
+    "start": "pnpm run build && pnpm run make-icon && electron .",
     "fetch-node": "node scripts/fetch-node.mjs",
     "make-icon": "node scripts/make-icon.mjs",
-    "dist": "pnpm run build && pnpm run fetch-node && pnpm run make-icon && electron-builder"
+    "prepare-backend": "node scripts/prepare-backend.mjs",
+    "dist": "pnpm run build && pnpm run fetch-node && pnpm run make-icon && pnpm run prepare-backend && node scripts/run-builder.mjs && pnpm run verify:package && pnpm run smoke:package && pnpm run footprint && node scripts/finalize-release.mjs",
+    "verify:package": "node scripts/verify-packaged-runtime.mjs",
+    "smoke:package": "node scripts/smoke-packaged-backend.mjs",
+    "footprint": "node scripts/measure-footprint.mjs"
   },
   "dependencies": {
     "@deepseek-ai/cordis-plugin-group": "workspace:^",
@@ -48,11 +52,13 @@
     "electron-updater": "6.8.9"
   },
   "devDependencies": {
+    "@electron/asar": "3.4.1",
     "@types/archiver": "8.0.0",
     "@types/node": "^22.0.0",
     "electron": "^43.4.0",
     "electron-builder": "^26.15.3",
     "sharp": "^0.35.3",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "yaml": "2.9.0"
   }
 }

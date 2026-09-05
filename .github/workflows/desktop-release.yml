@@ -1,0 +1,64 @@
+name: Desktop Release
+
+on:
+  push:
+    tags:
+      - 'desktop-v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows-release:
+    name: Build and publish Windows desktop installer
+    runs-on: windows-2025
+    env:
+      DSH_DESKTOP_UPDATE_OWNER: ${{ github.repository_owner }}
+      DSH_DESKTOP_UPDATE_REPO: ${{ github.event.repository.name }}
+      CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.15.0
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify recorded official upstream
+        shell: pwsh
+        run: |
+          git remote add official https://github.com/deepseek-ai/deepseek-harness.git
+          git fetch official master --no-tags
+          pnpm exec tsx apps/desktop/scripts/verify-upstream.ts --tag $env:GITHUB_REF_NAME --head HEAD --official-ref official/master
+
+      - name: Build source and test desktop modules
+        run: |
+          pnpm run build
+          pnpm exec vitest run apps/desktop/tests
+
+      - name: Build, verify, and finalize NSIS installer
+        run: pnpm run desktop:dist
+
+      - name: Generate release notes
+        run: node apps/desktop/scripts/generate-release-notes.mjs apps/desktop/build/release-notes.md
+
+      - name: Publish exactly the update assets
+        shell: pwsh
+        run: |
+          $version = (Get-Content apps/desktop/package.json | ConvertFrom-Json).version
+          gh release create $env:GITHUB_REF_NAME --verify-tag --title "DeepSeek Harness Desktop $version" --notes-file apps/desktop/build/release-notes.md "apps/desktop/release/DeepSeek Harness Setup $version.exe" "apps/desktop/release/DeepSeek Harness Setup $version.exe.blockmap" "apps/desktop/release/latest.yml"

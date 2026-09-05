@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   createUpdateManager,
+  type UpdateDialogLike,
   type UpdateEventMap,
   type UpdateManagerOptions,
   type UpdaterLike,
@@ -27,7 +28,7 @@ class FakeUpdater implements UpdaterLike {
 
 function harness(overrides: Partial<UpdateManagerOptions> = {}) {
   const updater = new FakeUpdater()
-  const showMessageBox = vi.fn(async () => ({ response: 1 }))
+  const showMessageBox = vi.fn<UpdateDialogLike['showMessageBox']>(async () => ({ response: 1 }))
   const setProgressBar = vi.fn((_progress: number) => undefined)
   const logError = vi.fn((_event: string, _fields?: Record<string, unknown>) => undefined)
   const restartToUpdate = vi.fn(async (install: () => void) => { install() })

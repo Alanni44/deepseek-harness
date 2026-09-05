@@ -382,6 +382,19 @@ function checkRepositoryVersion(): string[] {
   return ['package.json: version must be X.Y.Z with an optional prerelease segment']
 }
 
+/** Require the workspace deployment mode used by the self-contained desktop backend. */
+function checkDesktopDeploymentConfig(): string[] {
+  const deployScript = readFileSync(join(root, 'apps', 'desktop', 'scripts', 'prepare-backend.mjs'), 'utf8')
+  const errors: string[] = []
+  if (!deployScript.includes("'--config.inject-workspace-packages=true'")) {
+    errors.push('apps/desktop/scripts/prepare-backend.mjs: deploy must inject workspace packages')
+  }
+  if (!deployScript.includes("'--config.verify-deps-before-run=false'")) {
+    errors.push('apps/desktop/scripts/prepare-backend.mjs: deploy must not rewrite the development install')
+  }
+  return errors
+}
+
 /** Dependency sections whose ranges reach a published tarball or a local install. */
 const dependencySections = ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies'] as const
 
@@ -412,6 +425,7 @@ function checkWorkspaceProtocol(manifests: readonly WorkspaceManifest[]): string
 const manifests = workspaceManifests()
 const errors = [
   ...checkRepositoryVersion(),
+  ...checkDesktopDeploymentConfig(),
   ...manifests.flatMap(checkWorkspace),
   ...checkWorkspaceProtocol(manifests),
   ...checkHierarchyShape(),

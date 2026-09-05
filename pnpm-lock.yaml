@@ -422,6 +422,9 @@ importers:
         specifier: 6.8.9
         version: 6.8.9(supports-color@9.4.0)
     devDependencies:
+      '@electron/asar':
+        specifier: 3.4.1
+        version: 3.4.1
       '@types/archiver':
         specifier: 8.0.0
         version: 8.0.0
@@ -440,6 +443,9 @@ importers:
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
+      yaml:
+        specifier: 2.9.0
+        version: 2.9.0
 
   apps/web:
     dependencies:
