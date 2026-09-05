@@ -65,4 +65,11 @@ describe('desktop packaging contract', () => {
     ]) expect(existsSync(join(DESKTOP_ROOT, 'scripts', script))).toBe(true)
   })
 
+  it('keeps an attainable unpacked footprint reduction budget', () => {
+    const baseline = JSON.parse(readFileSync(join(DESKTOP_ROOT, 'footprint-baseline.json'), 'utf8')) as {
+      minimumUnpackedReductionBytes?: unknown
+    }
+    expect(baseline.minimumUnpackedReductionBytes).toBe(12 * 1024 * 1024)
+  })
+
 })
